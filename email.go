@@ -15,6 +15,7 @@ import (
 	"mime/quotedprintable"
 	"net/mail"
 	"net/smtp"
+	"crypto/tls"
 	"net/textproto"
 	"os"
 	"path/filepath"
@@ -355,6 +356,81 @@ func (e *Email) Send(addr string, a smtp.Auth) error {
 		return err
 	}
 	return smtp.SendMail(addr, a, from.Address, to, raw)
+}
+
+// Send an email using the given host, SMTP auth (optional) and HELO hostname, returns any error thrown by smtp.SendMail
+// This function merges the To, Cc, and Bcc fields and calls the smtp.SendMail function using the Email.Bytes() output as the message
+func (e *Email) SendWithHELO(hostname string, port int32, a smtp.Auth, heloHostname string) error {
+	// format server address
+	addr := fmt.Sprintf("%s:%d", hostname, port)
+	// Merge the To, Cc, and Bcc fields
+	to := make([]string, 0, len(e.To)+len(e.Cc)+len(e.Bcc))
+	to = append(append(append(to, e.To...), e.Cc...), e.Bcc...)
+	for i := 0; i < len(to); i++ {
+		addr, err := mail.ParseAddress(to[i])
+		if err != nil {
+			return err
+		}
+		to[i] = addr.Address
+	}
+	// Check to make sure there is at least one recipient and one "From" address
+	if e.From == "" || len(to) == 0 {
+		return errors.New("Must specify at least one From address and one To address")
+	}
+	from, err := mail.ParseAddress(e.From)
+	if err != nil {
+		return err
+	}
+	raw, err := e.Bytes()
+	if err != nil {
+		return err
+	}
+
+	// Manually send email using net/smtp
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if err = c.Hello(heloHostname); err != nil {
+		return err
+	}
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		config := &tls.Config{ServerName: hostname}		
+		if err = c.StartTLS(config); err != nil {
+			return err
+		}
+	}
+	if a != nil {
+		if ok, _ := c.Extension("AUTH"); ok {		
+			if err = c.Auth(a); err != nil {
+				return err
+			}
+		}
+	}
+	if err = c.Mail(from.Address); err != nil {
+		return err
+	}
+	for _, addr := range to {
+		if err = c.Rcpt(addr); err != nil {
+			return err
+		}
+	}
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(raw)
+	if err != nil {
+		return err
+	}
+	err = w.Close()
+	if err != nil {
+		return err
+	}
+	return c.Quit()
+
+	//return smtp.SendMail(addr, a, from.Address, to, raw)
 }
 
 // Attachment is a struct representing an email attachment.
