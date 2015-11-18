@@ -387,22 +387,46 @@ func (e *Email) SendWithHELO(hostname string, port int32, a smtp.Auth, heloHostn
 	}
 
 	// Manually send email using net/smtp
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		return err
-	}
+
+	var c *smtp.Client
+    if port == 465 {
+      // TLS config
+      tlsconfig := &tls.Config {
+        InsecureSkipVerify: true,
+        ServerName: hostname,
+      }
+
+      // Here is the key, you need to call tls.Dial instead of smtp.Dial
+      // for smtp servers running on 465 that require an ssl connection
+      // from the very beginning (no starttls)
+      conn, err := tls.Dial("tcp", addr, tlsconfig)
+      if err != nil {
+          return err
+      }
+
+      c, err = smtp.NewClient(conn, hostname)
+      if err != nil {
+          return err
+      }
+    } else {
+      c, err = smtp.Dial(addr)
+      if err != nil {
+        return err
+      }
+    }
+
 	defer c.Close()
 	if err = c.Hello(heloHostname); err != nil {
 		return err
 	}
 	if ok, _ := c.Extension("STARTTLS"); ok {
-		config := &tls.Config{ServerName: hostname}		
+		config := &tls.Config{ServerName: hostname}
 		if err = c.StartTLS(config); err != nil {
 			return err
 		}
 	}
 	if a != nil {
-		if ok, _ := c.Extension("AUTH"); ok {		
+		if ok, _ := c.Extension("AUTH"); ok {
 			if err = c.Auth(a); err != nil {
 				return err
 			}
