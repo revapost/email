@@ -330,6 +330,78 @@ func (e *Email) Bytes() ([]byte, error) {
 	return buff.Bytes(), nil
 }
 
+// BodyString converts the Email object to a string representation, excluding the headers
+func (e *Email) BodyString() (string, error) {
+	// TODO: better guess buffer size
+	buff := bytes.NewBuffer(make([]byte, 0, 4096))
+
+	headers := textproto.MIMEHeader{}
+	w := multipart.NewWriter(buff)
+	// TODO: determine the content type based on message/attachment mix.
+	headers.Set("Content-Type", "multipart/mixed;\r\n boundary="+w.Boundary())
+	headerToBytes(buff, headers)
+	io.WriteString(buff, "\r\n")
+
+	// Start the multipart/mixed part
+	fmt.Fprintf(buff, "--%s\r\n", w.Boundary())
+	header := textproto.MIMEHeader{}
+	// Check to see if there is a Text or HTML field
+	if len(e.Text) > 0 || len(e.HTML) > 0 {
+		subWriter := multipart.NewWriter(buff)
+		// Create the multipart alternative part
+		header.Set("Content-Type", fmt.Sprintf("multipart/alternative;\r\n boundary=%s\r\n", subWriter.Boundary()))
+		// Write the header
+		headerToBytes(buff, header)
+		// Create the body sections
+		if len(e.Text) > 0 {
+			header.Set("Content-Type", fmt.Sprintf("text/plain; charset=UTF-8"))
+			header.Set("Content-Transfer-Encoding", "quoted-printable")
+			if _, err := subWriter.CreatePart(header); err != nil {
+				return "", err
+			}
+			qp := quotedprintable.NewWriter(buff)
+			// Write the text
+			if _, err := qp.Write(e.Text); err != nil {
+				return "", err
+			}
+			if err := qp.Close(); err != nil {
+				return "", err
+			}
+		}
+		if len(e.HTML) > 0 {
+			header.Set("Content-Type", fmt.Sprintf("text/html; charset=UTF-8"))
+			header.Set("Content-Transfer-Encoding", "quoted-printable")
+			if _, err := subWriter.CreatePart(header); err != nil {
+				return "", err
+			}
+			qp := quotedprintable.NewWriter(buff)
+			// Write the HTML
+			if _, err := qp.Write(e.HTML); err != nil {
+				return "", err
+			}
+			if err := qp.Close(); err != nil {
+				return "", err
+			}
+		}
+		if err := subWriter.Close(); err != nil {
+			return "", err
+		}
+	}
+	// Create attachment part, if necessary
+	for _, a := range e.Attachments {
+		ap, err := w.CreatePart(a.Header)
+		if err != nil {
+			return "", err
+		}
+		// Write the base64Wrapped content to the part
+		base64Wrap(ap, a.Content)
+	}
+	if err := w.Close(); err != nil {
+		return "", err
+	}
+	return buff.String(), nil
+}
+
 // Send an email using the given host and SMTP auth (optional), returns any error thrown by smtp.SendMail
 // This function merges the To, Cc, and Bcc fields and calls the smtp.SendMail function using the Email.Bytes() output as the message
 func (e *Email) Send(addr string, a smtp.Auth) error {
