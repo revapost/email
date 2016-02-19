@@ -331,32 +331,30 @@ func (e *Email) Bytes() ([]byte, error) {
 }
 
 // BodyString converts the Email object to a string representation, excluding the headers
-func (e *Email) BodyString() (string, error) {
+func (e *Email) BodyString(boundary string) (string, error) {
 	// TODO: better guess buffer size
 	buff := bytes.NewBuffer(make([]byte, 0, 4096))
 
-	headers := textproto.MIMEHeader{}
 	w := multipart.NewWriter(buff)
-	// TODO: determine the content type based on message/attachment mix.
-	headers.Set("Content-Type", "multipart/mixed;\r\n boundary="+w.Boundary())
-	headerToBytes(buff, headers)
-	io.WriteString(buff, "\r\n")
+	if boundary != "" {
+		w.SetBoundary(boundary)
+	}
 
 	// Start the multipart/mixed part
-	fmt.Fprintf(buff, "--%s\r\n", w.Boundary())
+	//fmt.Fprintf(buff, "--%s\r\n", w.Boundary())
 	header := textproto.MIMEHeader{}
 	// Check to see if there is a Text or HTML field
 	if len(e.Text) > 0 || len(e.HTML) > 0 {
-		subWriter := multipart.NewWriter(buff)
+		//subWriter := multipart.NewWriter(buff)
 		// Create the multipart alternative part
-		header.Set("Content-Type", fmt.Sprintf("multipart/alternative;\r\n boundary=%s\r\n", subWriter.Boundary()))
+		//header.Set("Content-Type", fmt.Sprintf("multipart/alternative;\r\n boundary=%s\r\n", subWriter.Boundary()))
 		// Write the header
-		headerToBytes(buff, header)
+		//headerToBytes(buff, header)
 		// Create the body sections
 		if len(e.Text) > 0 {
 			header.Set("Content-Type", fmt.Sprintf("text/plain; charset=UTF-8"))
 			header.Set("Content-Transfer-Encoding", "quoted-printable")
-			if _, err := subWriter.CreatePart(header); err != nil {
+			if _, err := w.CreatePart(header); err != nil {
 				return "", err
 			}
 			qp := quotedprintable.NewWriter(buff)
@@ -371,7 +369,7 @@ func (e *Email) BodyString() (string, error) {
 		if len(e.HTML) > 0 {
 			header.Set("Content-Type", fmt.Sprintf("text/html; charset=UTF-8"))
 			header.Set("Content-Transfer-Encoding", "quoted-printable")
-			if _, err := subWriter.CreatePart(header); err != nil {
+			if _, err := w.CreatePart(header); err != nil {
 				return "", err
 			}
 			qp := quotedprintable.NewWriter(buff)
@@ -383,7 +381,7 @@ func (e *Email) BodyString() (string, error) {
 				return "", err
 			}
 		}
-		if err := subWriter.Close(); err != nil {
+		if err := w.Close(); err != nil {
 			return "", err
 		}
 	}
