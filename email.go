@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math/rand"
 	"mime"
 	"mime/multipart"
@@ -18,9 +19,12 @@ import (
 	"crypto/tls"
 	"net/textproto"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/revapost/revamail-go-front/configprofile"
 )
 
 const (
@@ -258,12 +262,12 @@ func (e *Email) msgHeaders() textproto.MIMEHeader {
 	return res
 }
 
-// Bytes converts the Email object to a []byte representation, including all needed MIMEHeaders, boundaries, etc.
+// Buff converts the Email object to a []byte representation, including all needed MIMEHeaders, boundaries, etc.
 func (e *Email) Bytes() ([]byte, error) {
 	// TODO: better guess buffer size
 	buff := bytes.NewBuffer(make([]byte, 0, 4096))
 
-	headers := e.msgHeaders()
+	headers := textproto.MIMEHeader{}
 	w := multipart.NewWriter(buff)
 	// TODO: determine the content type based on message/attachment mix.
 	headers.Set("Content-Type", "multipart/mixed;\r\n boundary="+w.Boundary())
@@ -430,7 +434,7 @@ func (e *Email) Send(addr string, a smtp.Auth) error {
 
 // Send an email using the given host, SMTP auth (optional) and HELO hostname, returns any error thrown by smtp.SendMail
 // This function merges the To, Cc, and Bcc fields and calls the smtp.SendMail function using the Email.Bytes() output as the message
-func (e *Email) SendWithHELO(hostname string, port int32, a smtp.Auth, heloHostname string) error {
+func (e *Email) SendWithHELO(hostname string, port int32, a smtp.Auth, heloHostname string, esCerts *configprofile.CodeSigningCerts) error {
 	// format server address
 	addr := fmt.Sprintf("%s:%d", hostname, port)
 	// Merge the To, Cc, and Bcc fields
@@ -451,10 +455,44 @@ func (e *Email) SendWithHELO(hostname string, port int32, a smtp.Auth, heloHostn
 	if err != nil {
 		return err
 	}
-	raw, err := e.Bytes()
+
+	// Sign the email with S/MIME
+	cmd := exec.Command("openssl", "smime", "-sign", "-signer", esCerts.Cert, "-inkey", esCerts.Key)
+
+	emailBytes, err := e.Bytes()
 	if err != nil {
 		return err
 	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+
+	err = cmd.Start()
+	if err != nil {
+		return err
+	}
+
+	stdin.Write(emailBytes)
+	stdin.Close()
+
+	signedData, err := ioutil.ReadAll(stdout)
+	if err != nil {
+		return err
+	}
+	err = cmd.Wait()
+	if err != nil {
+		return err
+	}
+
+	var signedEmail bytes.Buffer
+	headerToBytes(&signedEmail, e.msgHeaders())
+	signedEmail.Write(signedData)
+	raw := signedEmail.Bytes()
 
 	// Manually send email using net/smtp
 
@@ -523,8 +561,6 @@ func (e *Email) SendWithHELO(hostname string, port int32, a smtp.Auth, heloHostn
 		return err
 	}
 	return c.Quit()
-
-	//return smtp.SendMail(addr, a, from.Address, to, raw)
 }
 
 // Attachment is a struct representing an email attachment.
