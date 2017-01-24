@@ -456,43 +456,58 @@ func (e *Email) SendWithHELO(hostname string, port int32, a smtp.Auth, heloHostn
 		return err
 	}
 
+	var raw []byte
 	// Sign the email with S/MIME
-	cmd := exec.Command("openssl", "smime", "-sign", "-signer", esCerts.Cert, "-inkey", esCerts.Key)
+	if esCerts.Cert != "" && esCerts.Key != "" {
+		cmd := exec.Command("openssl", "smime", "-sign", "-signer", esCerts.Cert, "-inkey", esCerts.Key)
 
-	emailBytes, err := e.Bytes()
-	if err != nil {
-		return err
-	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
+		emailBytes, err := e.Bytes()
+		if err != nil {
+			return err
+		}
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return err
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return err
+		}
+
+		err = cmd.Start()
+		if err != nil {
+			return err
+		}
+
+		stdin.Write(emailBytes)
+		stdin.Close()
+
+		signedData, err := ioutil.ReadAll(stdout)
+		if err != nil {
+			return err
+		}
+		err = cmd.Wait()
+		if err != nil {
+			return err
+		}
+
+		var signedEmail bytes.Buffer
+		headerToBytes(&signedEmail, e.msgHeaders())
+		signedEmail.Write(signedData)
+		raw = signedEmail.Bytes()
+	} else {
+		var unsignedEmail bytes.Buffer
+		headerToBytes(&unsignedEmail, e.msgHeaders())
+		emailBytes, err := e.Bytes()
+		if err != nil {
+			return err
+		}
+		unsignedEmail.Write(emailBytes)
+		raw = unsignedEmail.Bytes()
 	}
 
-	err = cmd.Start()
-	if err != nil {
-		return err
-	}
 
-	stdin.Write(emailBytes)
-	stdin.Close()
 
-	signedData, err := ioutil.ReadAll(stdout)
-	if err != nil {
-		return err
-	}
-	err = cmd.Wait()
-	if err != nil {
-		return err
-	}
-
-	var signedEmail bytes.Buffer
-	headerToBytes(&signedEmail, e.msgHeaders())
-	signedEmail.Write(signedData)
-	raw := signedEmail.Bytes()
 
 	// Manually send email using net/smtp
 
